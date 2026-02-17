@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Continuum Library</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #1a1a2e; color: #eee; min-height: 100vh; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.06); border-radius: 12px; }
+    .toolbar input[type="search"], .toolbar select { padding: 8px 12px; border-radius: 8px; border: 1px solid #444; background: #2a2a3e; color: #eee; }
+    .toolbar button { padding: 8px 16px; border-radius: 8px; border: none; background: #667eea; color: white; cursor: pointer; }
+    .toolbar button:hover { opacity: 0.9; }
+    .toolbar button.secondary { background: #444; }
+    .layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; min-height: 70vh; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; overflow: auto; }
+    #map { height: 300px; border-radius: 8px; }
+    .results-list { list-style: none; padding: 0; margin: 0; }
+    .results-list li { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .results-list li:hover { background: rgba(255,255,255,0.08); }
+    .results-list li.selected { background: rgba(102,126,234,0.3); }
+    .viewer-section { margin-top: 16px; }
+    .viewer-section h3 { margin-top: 0; }
+    .meta-form label { display: block; margin-top: 8px; color: #aaa; font-size: 12px; }
+    .meta-form input, .meta-form textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #444; background: #2a2a3e; color: #eee; margin-top: 4px; }
+    .upload-zone { border: 2px dashed #555; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 16px; cursor: pointer; }
+    .upload-zone.dragover { border-color: #667eea; background: rgba(102,126,234,0.1); }
+    .location-block { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .location-block input { width: 100%; }
+    .type-fields { margin-top: 12px; }
+    .hidden { display: none !important; }
+    .msg { padding: 8px; border-radius: 8px; margin: 8px 0; }
+    .msg.error { background: rgba(255,100,100,0.2); color: #f88; }
+    .msg.success { background: rgba(100,255,100,0.2); color: #8f8; }
+    .preview-img { max-width: 100%; max-height: 200px; border-radius: 8px; }
+    .doc-type-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #444; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <input type="search" id="search-q" placeholder="Search..." aria-label="Search">
+    <select id="filter-type" aria-label="Document type">
+      <option value="">All types</option>
+      <option value="video">Video</option>
+      <option value="document">Document</option>
+      <option value="audio">Audio</option>
+      <option value="image">Image</option>
+      <option value="program">Program</option>
+      <option value="data">Data</option>
+    </select>
+    <input type="number" id="search-lat" placeholder="Lat" step="any" style="width:90px" aria-label="Latitude">
+    <input type="number" id="search-lon" placeholder="Lon" step="any" style="width:90px" aria-label="Longitude">
+    <select id="search-distance" aria-label="Distance">
+      <option value="infinite">Infinite</option>
+      <option value="0">Same bucket (0 mi)</option>
+      <option value="10">10 mi</option>
+      <option value="100">100 mi</option>
+      <option value="500">500 mi</option>
+      <option value="24000">24000 mi</option>
+    </select>
+    <button type="button" id="btn-search">Search</button>
+    <button type="button" id="btn-upload-open" class="secondary">Upload</button>
+  </div>
+
+  <div class="layout">
+    <div class="panel">
+      <div id="map"></div>
+      <h3>Results</h3>
+      <ul class="results-list" id="results-list"></ul>
+    </div>
+    <div class="panel">
+      <div id="viewer-panel">
+        <div id="viewer-empty">Select a document from the list.</div>
+        <div id="viewer-content" class="hidden">
+          <h3 id="viewer-title"></h3>
+          <div id="viewer-preview"></div>
+          <div class="viewer-section">
+            <h4>Metadata</h4>
+            <div id="viewer-meta" class="meta-form"></div>
+          </div>
+        </div>
+      </div>
+      <div id="upload-panel" class="hidden">
+        <h3>Upload</h3>
+        <div class="upload-zone" id="upload-zone">Drop file here or click to choose</div>
+        <input type="file" id="upload-file" class="hidden">
+        <div class="meta-form">
+          <label>Document type</label>
+          <select id="upload-type">
+            <option value="video">Video</option>
+            <option value="document">Document</option>
+            <option value="audio">Audio</option>
+            <option value="image">Image</option>
+            <option value="program">Program</option>
+            <option value="data">Data</option>
+          </select>
+          <div class="location-block">
+            <div><label>Lat</label><input type="number" id="upload-lat" step="any" placeholder="Lat"></div>
+            <div><label>Lon</label><input type="number" id="upload-lon" step="any" placeholder="Lon"></div>
+            <div><label>Altitude (m)</label><input type="number" id="upload-alt" step="any" placeholder="Optional"></div>
+          </div>
+          <button type="button" id="btn-use-location">Use my location</button>
+          <div id="upload-type-fields" class="type-fields"></div>
+        </div>
+        <div id="upload-msg"></div>
+        <button type="button" id="btn-upload-submit">Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+(function() {
+  const DOC_TYPES = ['video','document','audio','image','program','data'];
+  const TYPE_FIELDS = {
+    video: ['title','publish_year','publisher','studio_created','url'],
+    document: ['language','embedded_languages','author','publish_year','url'],
+    audio: ['artist','studio_created','url'],
+    image: ['format','style','artist','studio_created','url','important_colors'],
+    program: ['language','artist','studio_created','url'],
+    data: ['format','embedded_formats','artist','studio_created','url']
+  };
+
+  const api = (path, opts = {}) => fetch(path, { credentials: 'include', ...opts });
+
+  let map = null;
+  let mapMarkers = [];
+  let searchCircle = null;
+  let currentResults = [];
+  let selectedId = null;
+  let uploadFile = null;
+
+  function initMap() {
+    if (map) return;
+    map = L.map('map').setView([40.7, -74], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+  }
+
+  function updateMapMarkers(results, centerLat, centerLon, distanceMi) {
+    mapMarkers.forEach(m => m.remove());
+    mapMarkers = [];
+    if (searchCircle) { map.removeLayer(searchCircle); searchCircle = null; }
+    if (centerLat != null && centerLon != null && distanceMi != null && distanceMi !== 'infinite' && parseFloat(distanceMi) > 0) {
+      const radiusMi = parseFloat(distanceMi);
+      const radiusM = radiusMi * 1609.34;
+      searchCircle = L.circle([centerLat, centerLon], { radius: radiusM, color: '#667eea', fillOpacity: 0.1 }).addTo(map);
+    }
+    results.forEach(r => {
+      if (r.lat == null || r.lon == null) return;
+      const m = L.marker([r.lat, r.lon]).addTo(map);
+      m.on('click', () => selectDocument(r.id));
+      m.docId = r.id;
+      mapMarkers.push(m);
+    });
+  }
+
+  function renderTypeFields(container, docType) {
+    const fields = TYPE_FIELDS[docType] || [];
+    container.innerHTML = fields.map(f => `
+      <label>${f.replace(/_/g, ' ')}</label>
+      <input type="text" data-field="${f}" placeholder="${f}">
+    `).join('');
+  }
+
+  function getTypeMetadataFromForm(container) {
+    const obj = {};
+    container.querySelectorAll('[data-field]').forEach(inp => {
+      if (inp.value) obj[inp.dataset.field] = inp.value;
+    });
+    return obj;
+  }
+
+  function showViewer(doc) {
+    if (!doc) return;
+    selectedId = doc.id;
+    document.querySelectorAll('#results-list li').forEach(li => { li.classList.toggle('selected', parseInt(li.dataset.id,10) === doc.id); });
+    document.getElementById('viewer-empty').classList.add('hidden');
+    document.getElementById('viewer-content').classList.remove('hidden');
+    const title = (doc.type_metadata && JSON.parse(doc.type_metadata || '{}').title) || doc.url || `Document ${doc.id}`;
+    document.getElementById('viewer-title').textContent = title;
+    const preview = document.getElementById('viewer-preview');
+    preview.innerHTML = '';
+    if (doc.document_type === 'image' && doc.url) preview.innerHTML = `<img src="${doc.url}" class="preview-img" alt="">`;
+    else if (doc.document_type === 'video' && doc.url) preview.innerHTML = `<video controls src="${doc.url}" style="max-width:100%"></video>`;
+    else if (doc.document_type === 'audio' && doc.url) preview.innerHTML = `<audio controls src="${doc.url}"></audio>`;
+    else if (doc.blob_ref) preview.innerHTML = `<a href="/api/library/documents/${doc.id}/download" download>Download file</a>`;
+    const metaDiv = document.getElementById('viewer-meta');
+    let meta = {};
+    try { meta = JSON.parse(doc.type_metadata || '{}'); } catch(_) {}
+    metaDiv.innerHTML = `
+      <p><strong>Type:</strong> ${doc.document_type}</p>
+      <p><strong>Location:</strong> ${doc.lat != null && doc.lon != null ? `${doc.lat}, ${doc.lon}` : '—'}</p>
+      ${Object.entries(meta).map(([k,v]) => `<p><strong>${k}:</strong> ${v}</p>`).join('')}
+    `;
+  }
+
+  function selectDocument(id) {
+    const doc = currentResults.find(r => r.id === id);
+    if (doc) showViewer(doc);
+  }
+
+  async function doSearch() {
+    const q = document.getElementById('search-q').value.trim() || undefined;
+    const document_type = document.getElementById('filter-type').value || undefined;
+    const lat = document.getElementById('search-lat').value ? parseFloat(document.getElementById('search-lat').value) : undefined;
+    const lon = document.getElementById('search-lon').value ? parseFloat(document.getElementById('search-lon').value) : undefined;
+    const distance_mi = document.getElementById('search-distance').value;
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (document_type) params.set('document_type', document_type);
+    if (lat != null) params.set('lat', lat);
+    if (lon != null) params.set('lon', lon);
+    if (distance_mi) params.set('distance_mi', distance_mi);
+    const r = await api('/api/library/search?' + params.toString());
+    const data = await r.json();
+    currentResults = Array.isArray(data) ? data : [];
+    const listEl = document.getElementById('results-list');
+    listEl.innerHTML = currentResults.map(doc => {
+      const meta = (() => { try { return JSON.parse(doc.type_metadata || '{}'); } catch(_) { return {}; } })();
+      const title = meta.title || meta.author || doc.url || `Document ${doc.id}`;
+      return `<li data-id="${doc.id}"><span>${title}</span><span class="doc-type-badge">${doc.document_type}</span></li>`;
+    }).join('');
+    listEl.querySelectorAll('li').forEach(li => li.addEventListener('click', () => selectDocument(parseInt(li.dataset.id,10))));
+    updateMapMarkers(currentResults, lat, lon, distance_mi);
+  }
+
+  document.getElementById('btn-search').addEventListener('click', doSearch);
+
+  document.getElementById('upload-type').addEventListener('change', function() {
+    renderTypeFields(document.getElementById('upload-type-fields'), this.value);
+  });
+
+  document.getElementById('btn-use-location').addEventListener('click', function() {
+    if (!navigator.geolocation) { document.getElementById('upload-msg').innerHTML = '<div class="msg error">Geolocation not supported</div>'; return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        document.getElementById('upload-lat').value = pos.coords.latitude;
+        document.getElementById('upload-lon').value = pos.coords.longitude;
+        if (pos.coords.altitude != null) document.getElementById('upload-alt').value = Math.round(pos.coords.altitude);
+        document.getElementById('upload-msg').innerHTML = '<div class="msg success">Location set</div>';
+      },
+      () => { document.getElementById('upload-msg').innerHTML = '<div class="msg error">Could not get location</div>'; }
+    );
+  });
+
+  const uploadZone = document.getElementById('upload-zone');
+  const uploadInput = document.getElementById('upload-file');
+  uploadZone.addEventListener('click', () => uploadInput.click());
+  uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+  uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) { uploadFile = e.dataTransfer.files[0]; uploadZone.textContent = uploadFile.name; }
+  });
+  uploadInput.addEventListener('change', function() {
+    if (this.files.length) { uploadFile = this.files[0]; uploadZone.textContent = uploadFile.name; }
+  });
+
+  document.getElementById('btn-upload-submit').addEventListener('click', async function() {
+    const docType = document.getElementById('upload-type').value;
+    const lat = document.getElementById('upload-lat').value ? parseFloat(document.getElementById('upload-lat').value) : null;
+    const lon = document.getElementById('upload-lon').value ? parseFloat(document.getElementById('upload-lon').value) : null;
+    const alt = document.getElementById('upload-alt').value ? parseFloat(document.getElementById('upload-alt').value) : null;
+    const typeMetadata = getTypeMetadataFromForm(document.getElementById('upload-type-fields'));
+    const fd = new FormData();
+    fd.append('document_type', docType);
+    fd.append('lat', lat != null ? lat : '');
+    fd.append('lon', lon != null ? lon : '');
+    fd.append('altitude_m', alt != null ? alt : '');
+    fd.append('type_metadata', JSON.stringify(typeMetadata));
+    if (uploadFile) fd.append('file', uploadFile);
+    const r = await api('/api/library/upload', { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    const msgEl = document.getElementById('upload-msg');
+    if (r.ok && data.id) {
+      msgEl.innerHTML = '<div class="msg success">Uploaded. ID: ' + data.id + '</div>';
+      uploadFile = null; uploadZone.textContent = 'Drop file here or click to choose';
+      doSearch();
+    } else {
+      msgEl.innerHTML = '<div class="msg error">' + (data.error || r.statusText) + '</div>';
+    }
+  });
+
+  document.getElementById('btn-upload-open').addEventListener('click', function() {
+    document.getElementById('viewer-panel').classList.add('hidden');
+    document.getElementById('upload-panel').classList.remove('hidden');
+    renderTypeFields(document.getElementById('upload-type-fields'), document.getElementById('upload-type').value);
+  });
+
+  const backBtn = document.createElement('button');
+  backBtn.textContent = 'Back to list';
+  backBtn.className = 'secondary';
+  backBtn.style.marginTop = '8px';
+  backBtn.onclick = () => {
+    document.getElementById('upload-panel').classList.add('hidden');
+    document.getElementById('viewer-panel').classList.remove('hidden');
+  };
+  document.getElementById('upload-panel').appendChild(backBtn);
+
+  initMap();
+  renderTypeFields(document.getElementById('upload-type-fields'), 'video');
+  doSearch();
+})();
+  </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Continuum library server
+flask>=3.0.0
+
+# Required: unified_semantic_archiver (USC). Not on PyPI; install from source first, then this file:
+#   pip install -e /path/to/unified-semantic-compressor
+#   pip install -r requirements.txt
+# See README and DEPENDENCIES.md for version expectations.
