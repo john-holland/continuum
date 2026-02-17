@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -24,6 +25,45 @@ UPLOADS_DIR = Path(os.environ.get("CONTINUUM_LIBRARY_UPLOADS") or str(_here / "l
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 _db: ContinuumDb | None = None
+
+# Per-tenant API keys: env CONTINUUM_TENANT_KEYS='{"tenant1":"key1"}' and/or file CONTINUUM_TENANT_KEYS_FILE.
+# Global CONTINUUM_API_KEY is used when the request tenant has no per-tenant key (backward compatible).
+_API_KEY = (os.environ.get("CONTINUUM_API_KEY") or "").strip()
+_TENANT_KEYS: dict[str, str] = {}
+_TENANT_KEYS_FILE = (os.environ.get("CONTINUUM_TENANT_KEYS_FILE") or "").strip()
+
+
+def _load_tenant_keys() -> dict[str, str]:
+    out: dict[str, str] = {}
+    env_json = (os.environ.get("CONTINUUM_TENANT_KEYS") or "").strip()
+    if env_json:
+        try:
+            out.update(json.loads(env_json))
+        except json.JSONDecodeError:
+            pass
+    if _TENANT_KEYS_FILE:
+        path = Path(_TENANT_KEYS_FILE)
+        if path.is_file():
+            try:
+                out.update(json.loads(path.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass
+    return out
+
+
+def _save_tenant_keys(keys: dict[str, str]) -> None:
+    if not _TENANT_KEYS_FILE:
+        return
+    path = Path(_TENANT_KEYS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(keys, indent=2))
+
+
+def _get_tenant_keys() -> dict[str, str]:
+    global _TENANT_KEYS
+    if not _TENANT_KEYS and (_API_KEY or os.environ.get("CONTINUUM_TENANT_KEYS") or _TENANT_KEYS_FILE):
+        _TENANT_KEYS = _load_tenant_keys()
+    return _TENANT_KEYS
 
 
 def get_db() -> ContinuumDb:
@@ -49,6 +89,31 @@ def get_tenant_from_request() -> str:
     if tenant is not None:
         tenant = (tenant or "").strip()
     return tenant or "default"
+
+
+def _key_for_tenant(tenant: str) -> str | None:
+    """Return the API key that must be presented for this tenant, or None if no auth required."""
+    keys = _get_tenant_keys()
+    if tenant in keys and keys[tenant]:
+        return keys[tenant]
+    if _API_KEY:
+        return _API_KEY
+    return None
+
+
+@app.before_request
+def optional_api_key():
+    """Require X-API-Key or api_key for /api/library when global or per-tenant key is configured."""
+    if not request.path.startswith("/api/library"):
+        return None
+    tenant = get_tenant_from_request()
+    required = _key_for_tenant(tenant)
+    if not required:
+        return None
+    provided = (request.headers.get("X-API-Key") or request.args.get("api_key") or "").strip()
+    if provided != required:
+        return jsonify({"error": "Unauthorized"}), 401
+    return None
 
 
 @app.route("/")
@@ -169,6 +234,29 @@ def geocode():
         return jsonify({"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
+
+
+_ADMIN_KEY = (os.environ.get("CONTINUUM_ADMIN_KEY") or "").strip()
+
+
+@app.route("/api/admin/tenant-keys", methods=["POST"])
+def admin_tenant_keys():
+    """Generate a new API key for a tenant. Requires X-Admin-Key or Authorization: Bearer <CONTINUUM_ADMIN_KEY>."""
+    if _ADMIN_KEY:
+        auth = request.headers.get("X-Admin-Key") or request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer "):
+            auth = auth[7:].strip()
+        if auth != _ADMIN_KEY:
+            return jsonify({"error": "Forbidden"}), 403
+    body = request.get_json(silent=True) or {}
+    tenant_id = (body.get("tenant_id") or "").strip()
+    if not tenant_id:
+        return jsonify({"error": "tenant_id required"}), 400
+    api_key = secrets.token_urlsafe(32)
+    keys = _get_tenant_keys()
+    keys[tenant_id] = api_key
+    _save_tenant_keys(keys)
+    return jsonify({"tenant_id": tenant_id, "api_key": api_key}), 201
 
 
 def main():
